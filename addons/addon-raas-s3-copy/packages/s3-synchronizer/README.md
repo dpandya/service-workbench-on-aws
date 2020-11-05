@@ -24,7 +24,7 @@ Usage of bin/s3-synchronizer-darwin-amd64:
         Whether to print debug information
   -destination string
         The directory to download to (default "./")
-  -pollInterval int
+  -downloadInterval int
         The delay (in seconds) between api http requests (default 60)
   -region string
         The aws region to use for the session (default "us-east-1")

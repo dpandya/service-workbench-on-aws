@@ -3,9 +3,11 @@ package main
 
 import (
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -14,8 +16,10 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3/s3manager"
 )
 
-// To hold the number retrieved files
+// To hold the number retrieved files and other download related statistics
 type downloadStats struct {
+	start                  time.Time
+	end                    time.Time
 	numberOfRetrievedFiles int
 	totalRetrievedBytes    int64
 	errorPrefixes          []*string
@@ -52,15 +56,19 @@ func downloadFiles(sess *session.Session, config *mountConfiguration, concurrenc
 	destination := config.destination
 	bucket := config.bucket
 	prefix := config.prefix
-	start := time.Now()
+
 	if debug == true {
 		log.Println("Getting all files from the s3 bucket :", bucket, " and prefix: ", prefix)
 		log.Println("And will download them to :", destination)
 	}
-	stats := getBucketObjects(sess, config, concurrency, debug)
 
+	stats := getBucketObjects(sess, config, concurrency, debug)
+	reportDownloadStats(stats, debug)
+}
+
+func reportDownloadStats(stats *downloadStats, debug bool) {
 	end := time.Now()
-	duration := end.Sub(start)
+	duration := end.Sub(stats.start)
 	seconds := duration.Seconds()
 	if debug == true {
 		log.Printf("Downloaded %d files - %d bytes total at %.1f MB/s\n",
@@ -76,6 +84,8 @@ func downloadFiles(sess *session.Session, config *mountConfiguration, concurrenc
 
 func getBucketObjects(sess *session.Session, config *mountConfiguration, concurrency int, debug bool) *downloadStats {
 	stats := newDownloadStats()
+	stats.start = time.Now()
+
 	bucket := config.bucket
 	prefix := config.prefix
 	query := &s3.ListObjectsV2Input{
@@ -100,7 +110,57 @@ func getBucketObjects(sess *session.Session, config *mountConfiguration, concurr
 		truncatedListing = *resp.IsTruncated
 	}
 
+	stats.end = time.Now()
 	return stats
+}
+
+func setupRecurringDownloads(wg *sync.WaitGroup, sess *session.Session, config *mountConfiguration, concurrency int, debug bool, downloadInterval int, stopRecurringDownloadsAfter int) {
+	// Increment wait group counter everytime we spawn recurring downloads thread to make sure
+	// the caller (main) can wait
+	wg.Add(1)
+
+	statsCh := make(chan *downloadStats, 50)
+
+	continueRecurringDownloads := true
+	setupStartTime := time.Now()
+
+	// Kick off thread for recurring download for this mount configuration
+	// This thread will push download stats to stats channel and the reporter thread will receive stats from the
+	// stats channel and report (print) the stats
+	go func() {
+		for continueRecurringDownloads {
+			stats := getBucketObjects(sess, config, concurrency, debug)
+
+			statsCh <- stats // Push download stats to the stats channel. The reporter will read from statsCh and report it
+
+			// stopRecurringDownloadsAfter is negative then continue recurring downloads indefinitely
+			if stopRecurringDownloadsAfter > 0 {
+				current := time.Now()
+				duration := current.Sub(setupStartTime)
+				seconds := int(math.Round(duration.Seconds()))
+				// If the duration to continue recurring downloads has passed then set
+				// continueRecurringDownloads flat to false to stop the recurring downloads
+				//	from happening further
+				if seconds > stopRecurringDownloadsAfter {
+					continueRecurringDownloads = false
+
+					// Decrement from the wait group indicating we are done
+					wg.Done()
+				}
+			}
+			// Sleep for the download interval duration
+			time.Sleep(time.Duration(downloadInterval) * time.Second)
+		}
+	}()
+
+	// Kick off reporter thread for recurring reporting of the download stats
+	go func() {
+		for continueRecurringDownloads {
+			stats := <-statsCh
+
+			reportDownloadStats(stats, debug)
+		}
+	}()
 }
 
 func getObjectsAll(
