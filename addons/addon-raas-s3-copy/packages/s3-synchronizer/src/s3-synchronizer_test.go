@@ -20,6 +20,7 @@ import (
 var testAwsSession *session.Session
 
 const testRegion = "us-east-1"
+const debug = true
 
 // A test destination directory path. The test creates this directory and populates it with simulated downloads
 // This directory is cleaned up at the end of the test.
@@ -51,7 +52,6 @@ func TestMainImplForInitialDownloadSingleMount(t *testing.T) {
 	}
 
 	// ---- Inputs ----
-	debug := true
 	concurrency := 2
 
 	fmt.Printf("Input: \n\n%s\n\n", testMountsJson)
@@ -96,7 +96,6 @@ func TestMainImplForInitialDownloadMultipleMounts(t *testing.T) {
 	}
 
 	// ---- Inputs ----
-	debug := true
 	concurrency := 2
 
 	fmt.Printf("Input: \n\n%s\n\n", testMountsJson)
@@ -129,7 +128,6 @@ func TestMainImplForInitialDownloadEmptyMounts(t *testing.T) {
 	}
 
 	// ---- Inputs ----
-	debug := true
 	concurrency := 2
 
 	fmt.Printf("Input: \n\n%s\n\n", testMountsJson)
@@ -146,7 +144,6 @@ func TestMainImplForInitialDownloadEmptyMounts(t *testing.T) {
 // Negative test: Test for invalid s3Mounts json
 func TestMainImplForInitialDownloadInvalidMounts(t *testing.T) {
 	// ---- Inputs ----
-	debug := true
 	concurrency := 2
 
 	testMountsJson := "some invalid json"
@@ -163,11 +160,13 @@ func TestMainImplForInitialDownloadInvalidMounts(t *testing.T) {
 // ######### Tests for Recurring Downloads #########
 
 // Test for single S3Mount with recurring downloads
-func TestMainImplForRecurringDownloadSingleMount(t *testing.T) {
+// - Make sure S3 uploads after the initial download are synced automatically
+// - Make sure S3 deletes after the initial download are synced automatically
+func TestMainImplForSyncSingleMount(t *testing.T) {
 	// ---- Data setup ----
 	noOfMounts := 1
 	testMounts := make([]s3Mount, noOfMounts)
-	testMountId := "TestMainImplForRecurringDownloadSingleMount"
+	testMountId := "TestMainImplForSyncSingleMount"
 	noOfFilesInMount := 5
 	testMounts[0] = *putTestMountFiles(t, testFakeBucketName, testMountId, noOfFilesInMount)
 	testMountsJsonBytes, err := json.Marshal(testMounts)
@@ -179,11 +178,10 @@ func TestMainImplForRecurringDownloadSingleMount(t *testing.T) {
 	}
 
 	// ---- Inputs ----
-	debug := true
 	concurrency := 5
 	recurringDownloads := true
-	stopRecurringDownloadsAfter := 8
-	downloadInterval := 2
+	stopRecurringDownloadsAfter := 4
+	downloadInterval := 1
 
 	fmt.Printf("Input: \n\n%s\n\n", testMountsJson)
 
@@ -210,6 +208,9 @@ func TestMainImplForRecurringDownloadSingleMount(t *testing.T) {
 	// by the recurring downloader thread after the dow
 	wg.Add(1)
 	go func() {
+		// TEST FOR UPLOAD TO S3 --> LOCAL FILE SYSTEM SYNC
+		// ------------------------------------------------
+
 		// Upload same number of files in the mount again (i.e., double the noOfFilesInMount)
 		testMounts[0] = *putTestMountFiles(t, testFakeBucketName, testMountId, 2*noOfFilesInMount)
 
@@ -221,6 +222,20 @@ func TestMainImplForRecurringDownloadSingleMount(t *testing.T) {
 		// Verify that the newly uploaded files are automatically downloaded after the download interval
 		assertFilesDownloaded(t, testMountId, 2*noOfFilesInMount)
 
+		// TEST FOR DELETE FROM S3 --> LOCAL FILE SYSTEM SYNC
+		// --------------------------------------------------
+
+		fileIdxToDelete := noOfFilesInMount + 1
+		// Delete some files from S3 and make sure they automatically get deleted from local file system
+		deleteTestMountFile(t, testFakeBucketName, testMountId, fileIdxToDelete)
+
+		// Sleep for the download interval duration plus some more buffer time to allow sync to happen
+		time.Sleep(time.Duration(2*downloadInterval) * time.Second)
+
+		// ---- Assertions ----
+		// Verify that the file deleted from S3 are automatically deleted after the download interval
+		assertFileDeleted(t, testMountId, fileIdxToDelete)
+
 		// Decrement wait group counter to allow this test case to exit
 		wg.Done()
 	}()
@@ -229,21 +244,23 @@ func TestMainImplForRecurringDownloadSingleMount(t *testing.T) {
 }
 
 // Test for multiple S3Mounts with recurring downloads
-func TestMainImplForRecurringDownloadMultipleMounts(t *testing.T) {
+// - Make sure S3 uploads after the initial download are synced automatically
+// - Make sure S3 deletes after the initial download are synced automatically
+func TestMainImplForSyncMultipleMounts(t *testing.T) {
 	// ---- Data setup ----
 	noOfMounts := 3
 	testMounts := make([]s3Mount, noOfMounts)
 	testBucketName := "test-bucket"
 
-	testMountId1 := "TestMainImplForRecurringDownloadMultipleMounts1"
+	testMountId1 := "TestMainImplForSyncMultipleMounts1"
 	noOfFilesInMount1 := 5
 	testMounts[0] = *putTestMountFiles(t, testBucketName, testMountId1, noOfFilesInMount1)
 
-	testMountId2 := "TestMainImplForRecurringDownloadMultipleMounts2"
+	testMountId2 := "TestMainImplForSyncMultipleMounts2"
 	noOfFilesInMount2 := 1
 	testMounts[1] = *putTestMountFiles(t, testBucketName, testMountId2, noOfFilesInMount2)
 
-	testMountId3 := "TestMainImplForRecurringDownloadMultipleMounts3"
+	testMountId3 := "TestMainImplForSyncMultipleMounts3"
 	noOfFilesInMount3 := 0 // Test mount containing no files (simulating empty folder in S3)
 	testMounts[2] = *putTestMountFiles(t, testBucketName, testMountId3, noOfFilesInMount3)
 
@@ -256,11 +273,10 @@ func TestMainImplForRecurringDownloadMultipleMounts(t *testing.T) {
 	}
 
 	// ---- Inputs ----
-	debug := true
 	concurrency := 5
 	recurringDownloads := true
-	stopRecurringDownloadsAfter := 8
-	downloadInterval := 2
+	stopRecurringDownloadsAfter := 4
+	downloadInterval := 1
 
 	fmt.Printf("Input: \n\n%s\n\n", testMountsJson)
 
@@ -289,6 +305,9 @@ func TestMainImplForRecurringDownloadMultipleMounts(t *testing.T) {
 	// by the recurring downloader thread after the dow
 	wg.Add(1)
 	go func() {
+		// TEST FOR UPLOAD TO S3 --> LOCAL FILE SYSTEM SYNC
+		// ------------------------------------------------
+
 		// Upload same number of files in the mount again (i.e., double the noOfFilesInMount)
 		testMounts[0] = *putTestMountFiles(t, testBucketName, testMountId1, 2*noOfFilesInMount1)
 		testMounts[1] = *putTestMountFiles(t, testBucketName, testMountId2, 2*noOfFilesInMount2)
@@ -303,6 +322,23 @@ func TestMainImplForRecurringDownloadMultipleMounts(t *testing.T) {
 		assertFilesDownloaded(t, testMountId1, 2*noOfFilesInMount1)
 		assertFilesDownloaded(t, testMountId2, 2*noOfFilesInMount2)
 		assertFilesDownloaded(t, testMountId3, 2*noOfFilesInMount3)
+
+		// TEST FOR DELETE FROM S3 --> LOCAL FILE SYSTEM SYNC
+		// --------------------------------------------------
+
+		fileIdxToDelete1 := noOfFilesInMount1 + 1
+		fileIdxToDelete2 := noOfFilesInMount2 + 1
+		// Delete some files from S3 and make sure they automatically get deleted from local file system
+		deleteTestMountFile(t, testFakeBucketName, testMountId1, fileIdxToDelete1)
+		deleteTestMountFile(t, testFakeBucketName, testMountId2, fileIdxToDelete2)
+
+		// Sleep for the download interval duration plus some more buffer time to allow sync to happen
+		time.Sleep(time.Duration(2*downloadInterval) * time.Second)
+
+		// ---- Assertions ----
+		// Verify that the file deleted from S3 are automatically deleted after the download interval
+		assertFileDeleted(t, testMountId1, fileIdxToDelete1)
+		assertFileDeleted(t, testMountId2, fileIdxToDelete2)
 
 		// Decrement wait group counter to allow this test case to exit
 		wg.Done()
@@ -325,7 +361,6 @@ func TestMainImplForRecurringDownloadEmptyMounts(t *testing.T) {
 	}
 
 	// ---- Inputs ----
-	debug := true
 	concurrency := 2
 
 	fmt.Printf("Input: \n\n%s\n\n", testMountsJson)
@@ -342,7 +377,6 @@ func TestMainImplForRecurringDownloadEmptyMounts(t *testing.T) {
 // Negative test: Test for invalid s3Mounts json for recurring downloads
 func TestMainImplForRecurringDownloadInvalidMounts(t *testing.T) {
 	// ---- Inputs ----
-	debug := true
 	concurrency := 2
 
 	testMountsJson := "some invalid json"
@@ -387,12 +421,32 @@ func putTestMountFiles(t *testing.T, bucketName string, testMountId string, noOf
 	return &s3Mount{Id: &testMountId, Bucket: &bucketName, Prefix: &mountPrefix, Writeable: &writeable, KmsKeyId: &kmsKeyId}
 }
 
+func deleteTestMountFile(t *testing.T, bucketName string, testMountId string, fileIdx int) {
+	s3Client := s3.New(testAwsSession)
+
+	mountPrefix := fmt.Sprintf("studies/Organization/%s", testMountId)
+	_, err := s3Client.DeleteObject(&s3.DeleteObjectInput{
+		Bucket: aws.String(bucketName),
+		Key:    aws.String(fmt.Sprintf("%s/test%d.txt", mountPrefix, fileIdx)),
+	})
+	if err != nil {
+		// Fail test in case of any errors
+		t.Errorf("Could not delete test files from fake S3 server for testing: %v", err)
+	}
+}
+
 func assertFilesDownloaded(t *testing.T, testMountId string, noOfFiles int) {
 	for i := 0; i < noOfFiles; i++ {
 		expectedFile := fmt.Sprintf("%s/%s/test%d.txt", destinationBase, testMountId, i)
 		if _, err := os.Stat(expectedFile); os.IsNotExist(err) {
-			t.Errorf(`Expected: File "%v" to exist after download | Actual: The file not found`, expectedFile)
+			t.Errorf(`ASSERT_FAILURE: Expected: File "%v" to exist after download | Actual: The file not found`, expectedFile)
 		}
+	}
+}
+func assertFileDeleted(t *testing.T, testMountId string, fileIdx int) {
+	expectedFile := fmt.Sprintf("%s/%s/test%d.txt", destinationBase, testMountId, fileIdx)
+	if _, err := os.Stat(expectedFile); !os.IsNotExist(err) {
+		t.Errorf(`ASSERT_FAILURE: Expected: File "%v" to NOT exist after sync | Actual: The file exists`, expectedFile)
 	}
 }
 

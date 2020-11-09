@@ -37,7 +37,7 @@ func mainImpl(sess *session.Session, debug bool, recurringDownloads bool, stopRe
 	go func() {
 		for {
 			mountConfig := <-mountsCh
-			if debug == true {
+			if debug {
 				log.Printf("Received mount configuration from channel: %+v\n", mountConfig)
 			}
 			if recurringDownloads {
@@ -56,14 +56,14 @@ func mainImpl(sess *session.Session, debug bool, recurringDownloads bool, stopRe
 					}
 				}()
 			}
-			if debug == true {
+			if debug {
 				log.Printf("Decrement wg counter")
 			}
 			wg.Done() // Decrement wait group counter everytime we receive config from the mount channel and complete processing it
 		}
 	}()
 
-	if debug == true {
+	if debug {
 		log.Println("Fetching environment info")
 	}
 
@@ -83,14 +83,14 @@ func mainImpl(sess *session.Session, debug bool, recurringDownloads bool, stopRe
 		s3Mounts = *s3MountsPtr
 	}
 
-	if debug == true {
+	if debug {
 		log.Println("Parsing mounts...")
 	}
 	for _, mount := range s3Mounts {
 		s := mountToString(&mount)
 		_, exists := currentMounts[s]
 
-		if debug == true {
+		if debug {
 			log.Printf("Mount: %v, Adding to mount queue: %t\n", *mount.Id, !exists)
 		}
 
@@ -104,7 +104,7 @@ func mainImpl(sess *session.Session, debug bool, recurringDownloads bool, stopRe
 				*mount.KmsKeyId,
 			)
 			wg.Add(1) // Increment wait group counter everytime we push config to the mount channel
-			if debug == true {
+			if debug {
 				log.Printf("Increment wg counter")
 			}
 			mountsCh <- config
