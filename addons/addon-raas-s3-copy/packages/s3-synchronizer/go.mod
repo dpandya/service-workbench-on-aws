@@ -4,7 +4,6 @@ go 1.13
 
 require (
 	github.com/aws/aws-sdk-go v1.35.15
-	github.com/fatih/color v1.10.0
 	github.com/fsnotify/fsnotify v1.4.9
 	github.com/go-sql-driver/mysql v1.5.0 // indirect
 	github.com/johannesboyne/gofakes3 v0.0.0-20200716060623-6b2b4cb092cc
