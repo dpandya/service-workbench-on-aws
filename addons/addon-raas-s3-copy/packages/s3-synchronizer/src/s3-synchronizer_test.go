@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/johannesboyne/gofakes3"
 	"github.com/johannesboyne/gofakes3/backend/s3mem"
+	"io/ioutil"
 	"net/http/httptest"
 	"os"
 	"strings"
@@ -30,6 +31,9 @@ const debug = true
 const destinationBase = "../.build/temp-output"
 
 const testFakeBucketName = "test-bucket"
+
+const testFileContentTemplate = "test file content for file = %d"
+const testFileUpdatedContentTemplate = "UPDATED -- test file content for file = %d"
 
 // ------------------------------- Test Cases -------------------------------/
 
@@ -160,8 +164,9 @@ func TestMainImplForInitialDownloadInvalidMounts(t *testing.T) {
 // ######### Tests for Recurring Downloads #########
 
 // Test for single S3Mount with recurring downloads
-// - Make sure S3 uploads after the initial download are synced automatically
-// - Make sure S3 deletes after the initial download are synced automatically
+// - Make sure S3 ADDs are synced automatically
+// - Make sure S3 UPDATEs are synced automatically
+// - Make sure S3 DELETEs are synced automatically
 func TestMainImplForSyncSingleMount(t *testing.T) {
 	// ---- Data setup ----
 	noOfMounts := 1
@@ -186,6 +191,7 @@ func TestMainImplForSyncSingleMount(t *testing.T) {
 	fmt.Printf("Input: \n\n%s\n\n", testMountsJson)
 
 	var wg sync.WaitGroup
+
 	// Trigger recurring download in a separate thread and increment the wait group counter
 	wg.Add(1)
 	go func() {
@@ -197,9 +203,6 @@ func TestMainImplForSyncSingleMount(t *testing.T) {
 			t.Errorf("Error: %v", err)
 		}
 
-		// ---- Assertions ----
-		assertFilesDownloaded(t, testMountId, noOfFilesInMount)
-
 		// Decrement wait group counter to allow this test case to exit
 		wg.Done()
 	}()
@@ -208,8 +211,8 @@ func TestMainImplForSyncSingleMount(t *testing.T) {
 	// by the recurring downloader thread after the dow
 	wg.Add(1)
 	go func() {
-		// TEST FOR UPLOAD TO S3 --> LOCAL FILE SYSTEM SYNC
-		// ------------------------------------------------
+		// TEST FOR ADD -- NEW UPLOAD TO S3 --> LOCAL FILE SYSTEM SYNC
+		// ------------------------------------------------------------
 
 		// Upload same number of files in the mount again (i.e., double the noOfFilesInMount)
 		testMounts[0] = *putTestMountFiles(t, testFakeBucketName, testMountId, 2*noOfFilesInMount)
@@ -222,8 +225,22 @@ func TestMainImplForSyncSingleMount(t *testing.T) {
 		// Verify that the newly uploaded files are automatically downloaded after the download interval
 		assertFilesDownloaded(t, testMountId, 2*noOfFilesInMount)
 
-		// TEST FOR DELETE FROM S3 --> LOCAL FILE SYSTEM SYNC
-		// --------------------------------------------------
+		// TEST FOR UPDATE -- UPLOAD TO EXISTING FILES IN S3 --> LOCAL FILE SYSTEM SYNC
+		// -----------------------------------------------------------------------------
+
+		// Update the files in S3
+		updateTestMountFiles(t, testFakeBucketName, testMountId, noOfFilesInMount)
+
+		// Sleep for the download interval duration plus some more buffer time to allow for
+		// uploaded files to get downloaded
+		time.Sleep(time.Duration(2*downloadInterval) * time.Second)
+
+		// ---- Assertions ----
+		// Verify that the updated files are automatically downloaded after the download interval
+		assertUpdatedFilesDownloaded(t, testMountId, noOfFilesInMount)
+
+		// TEST FOR DELETE -- DELETE FROM S3 --> LOCAL FILE SYSTEM SYNC
+		// ------------------------------------------------------------
 
 		fileIdxToDelete := noOfFilesInMount + 1
 		// Delete some files from S3 and make sure they automatically get deleted from local file system
@@ -244,8 +261,9 @@ func TestMainImplForSyncSingleMount(t *testing.T) {
 }
 
 // Test for multiple S3Mounts with recurring downloads
-// - Make sure S3 uploads after the initial download are synced automatically
-// - Make sure S3 deletes after the initial download are synced automatically
+// - Make sure S3 ADDs are synced automatically
+// - Make sure S3 UPDATEs are synced automatically
+// - Make sure S3 DELETEs are synced automatically
 func TestMainImplForSyncMultipleMounts(t *testing.T) {
 	// ---- Data setup ----
 	noOfMounts := 3
@@ -292,11 +310,6 @@ func TestMainImplForSyncMultipleMounts(t *testing.T) {
 			t.Errorf("Error: %v", err)
 		}
 
-		// ---- Assertions ----
-		assertFilesDownloaded(t, testMountId1, noOfFilesInMount1)
-		assertFilesDownloaded(t, testMountId2, noOfFilesInMount2)
-		assertFilesDownloaded(t, testMountId3, noOfFilesInMount3)
-
 		// Decrement wait group counter to allow this test case to exit
 		wg.Done()
 	}()
@@ -305,8 +318,8 @@ func TestMainImplForSyncMultipleMounts(t *testing.T) {
 	// by the recurring downloader thread after the dow
 	wg.Add(1)
 	go func() {
-		// TEST FOR UPLOAD TO S3 --> LOCAL FILE SYSTEM SYNC
-		// ------------------------------------------------
+		// TEST FOR ADD -- NEW UPLOAD TO S3 --> LOCAL FILE SYSTEM SYNC
+		// ------------------------------------------------------------
 
 		// Upload same number of files in the mount again (i.e., double the noOfFilesInMount)
 		testMounts[0] = *putTestMountFiles(t, testBucketName, testMountId1, 2*noOfFilesInMount1)
@@ -323,8 +336,26 @@ func TestMainImplForSyncMultipleMounts(t *testing.T) {
 		assertFilesDownloaded(t, testMountId2, 2*noOfFilesInMount2)
 		assertFilesDownloaded(t, testMountId3, 2*noOfFilesInMount3)
 
-		// TEST FOR DELETE FROM S3 --> LOCAL FILE SYSTEM SYNC
-		// --------------------------------------------------
+		// TEST FOR UPDATE -- UPLOAD TO EXISTING FILES IN S3 --> LOCAL FILE SYSTEM SYNC
+		// -----------------------------------------------------------------------------
+
+		// Update the files in S3
+		updateTestMountFiles(t, testFakeBucketName, testMountId1, noOfFilesInMount1)
+		updateTestMountFiles(t, testFakeBucketName, testMountId2, noOfFilesInMount2)
+		updateTestMountFiles(t, testFakeBucketName, testMountId3, noOfFilesInMount3)
+
+		// Sleep for the download interval duration plus some more buffer time to allow for
+		// uploaded files to get downloaded
+		time.Sleep(time.Duration(2*downloadInterval) * time.Second)
+
+		// ---- Assertions ----
+		// Verify that the updated files are automatically downloaded after the download interval
+		assertUpdatedFilesDownloaded(t, testMountId1, noOfFilesInMount1)
+		assertUpdatedFilesDownloaded(t, testMountId2, noOfFilesInMount2)
+		assertUpdatedFilesDownloaded(t, testMountId3, noOfFilesInMount3)
+
+		// TEST FOR DELETE -- DELETE FROM S3 --> LOCAL FILE SYSTEM SYNC
+		// ------------------------------------------------------------
 
 		fileIdxToDelete1 := noOfFilesInMount1 + 1
 		fileIdxToDelete2 := noOfFilesInMount2 + 1
@@ -406,7 +437,7 @@ func putTestMountFiles(t *testing.T, bucketName string, testMountId string, noOf
 	mountPrefix := fmt.Sprintf("studies/Organization/%s", testMountId)
 	for i := 0; i < noOfFiles; i++ {
 		_, err := s3Client.PutObject(&s3.PutObjectInput{
-			Body:   strings.NewReader("test file content"),
+			Body:   strings.NewReader(fmt.Sprintf(testFileContentTemplate, i)),
 			Bucket: aws.String(bucketName),
 			Key:    aws.String(fmt.Sprintf("%s/test%d.txt", mountPrefix, i)),
 		})
@@ -419,6 +450,24 @@ func putTestMountFiles(t *testing.T, bucketName string, testMountId string, noOf
 	writeable := false
 	kmsKeyId := ""
 	return &s3Mount{Id: &testMountId, Bucket: &bucketName, Prefix: &mountPrefix, Writeable: &writeable, KmsKeyId: &kmsKeyId}
+}
+
+func updateTestMountFiles(t *testing.T, bucketName string, testMountId string, noOfFiles int) {
+	s3Client := s3.New(testAwsSession)
+
+	mountPrefix := fmt.Sprintf("studies/Organization/%s", testMountId)
+	for i := 0; i < noOfFiles; i++ {
+		_, err := s3Client.PutObject(&s3.PutObjectInput{
+			Body:   strings.NewReader(fmt.Sprintf(testFileUpdatedContentTemplate, i)),
+			Bucket: aws.String(bucketName),
+			Key:    aws.String(fmt.Sprintf("%s/test%d.txt", mountPrefix, i)),
+		})
+		if err != nil {
+			// Fail test in case of any errors
+			t.Errorf("Could not put test files to fake S3 server for testing: %v", err)
+		}
+	}
+
 }
 
 func deleteTestMountFile(t *testing.T, bucketName string, testMountId string, fileIdx int) {
@@ -436,13 +485,34 @@ func deleteTestMountFile(t *testing.T, bucketName string, testMountId string, fi
 }
 
 func assertFilesDownloaded(t *testing.T, testMountId string, noOfFiles int) {
+	assertFilesDownloadedWithContent(t, testMountId, noOfFiles, testFileContentTemplate)
+}
+
+func assertUpdatedFilesDownloaded(t *testing.T, testMountId string, noOfFiles int) {
+	assertFilesDownloadedWithContent(t, testMountId, noOfFiles, testFileUpdatedContentTemplate)
+}
+
+func assertFilesDownloadedWithContent(t *testing.T, testMountId string, noOfFiles int, expectedContentTemplate string) {
 	for i := 0; i < noOfFiles; i++ {
 		expectedFile := fmt.Sprintf("%s/%s/test%d.txt", destinationBase, testMountId, i)
+		expectedFileContent := fmt.Sprintf(expectedContentTemplate, i)
 		if _, err := os.Stat(expectedFile); os.IsNotExist(err) {
 			t.Errorf(`ASSERT_FAILURE: Expected: File "%v" to exist after download | Actual: The file not found`, expectedFile)
+		} else {
+			// If file exists then verify its contents
+			fileContentBytes, err := ioutil.ReadFile(expectedFile)
+			fileContent := string(fileContentBytes)
+			if err == nil {
+				if expectedFileContent != fileContent {
+					t.Errorf(`ASSERT_FAILURE: CONTENT_MISMATCH: Expected: File "%v" to contain text "%v" | Actual: The file contains "%v" instead`, expectedFile, expectedFileContent, fileContent)
+				}
+			} else {
+				t.Errorf("Could not read file: %v | Error: %v", expectedFile, err)
+			}
 		}
 	}
 }
+
 func assertFileDeleted(t *testing.T, testMountId string, fileIdx int) {
 	expectedFile := fmt.Sprintf("%s/%s/test%d.txt", destinationBase, testMountId, fileIdx)
 	if _, err := os.Stat(expectedFile); !os.IsNotExist(err) {

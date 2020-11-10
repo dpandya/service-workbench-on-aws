@@ -119,6 +119,7 @@ func reportDownloadStats(stats *downloadStats, debug bool) {
 }
 
 func syncS3ToLocal(sess *session.Session, config *mountConfiguration, concurrency int, debug bool) *downloadStats {
+
 	stats := newDownloadStats()
 	stats.start = time.Now()
 
@@ -291,9 +292,7 @@ func downloadAllObjects(
 		// The correct way to check if file exists is using !os.IsNotExist(fileError)
 		if _, fileError := os.Stat(destFilePath); !os.IsNotExist(fileError) {
 			// If the file has not changed in S3 since last download then skip downloading it
-			if !hasFileChangedInS3(item) {
-				shouldDownload = false
-			}
+			shouldDownload = hasFileChangedInS3(item)
 			if !shouldDownload && debug {
 				log.Printf("'%v' already exists and is up-to-date. Skip downloading '%v'\n", destFilePath, *item.Key)
 			}
