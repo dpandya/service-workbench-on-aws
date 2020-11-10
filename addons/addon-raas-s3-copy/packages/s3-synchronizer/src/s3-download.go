@@ -237,8 +237,8 @@ func setupRecurringDownloads(wg *sync.WaitGroup, sess *session.Session, config *
 				duration := current.Sub(setupStartTime)
 				seconds := int(math.Round(duration.Seconds()))
 				// If the duration to continue recurring downloads has passed then set
-				// continueRecurringDownloads flat to false to stop the recurring downloads
-				//	from happening further
+				// continueRecurringDownloads flag to false to stop the recurring downloads
+				// from happening further
 				if seconds > stopRecurringDownloadsAfter {
 					continueRecurringDownloads = false
 
